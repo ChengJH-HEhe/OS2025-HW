@@ -1,0 +1,314 @@
+diff --git a/ACPITablePkg/ACPITable.c b/ACPITablePkg/ACPITable.c
+new file mode 100644
+index 0000000000..449102c130
+--- /dev/null
++++ b/ACPITablePkg/ACPITable.c
+@@ -0,0 +1,180 @@
++#include <Library/PrintLib.h>
++#include <Library/UefiLib.h>
++#include <Library/UefiBootServicesTableLib.h>
++#include <Library/BaseMemoryLib.h>
++#include <Library/DebugLib.h>
++#include <Guid/Acpi.h>
++
++#include <IndustryStandard/Acpi.h>
++#include <Uefi.h>
++
++
++/**
++  UEFI Entry Point function that prints all ACPI tables' information,
++  including address, length, and checksum.
++
++  @param[in] ImageHandle   The firmware-allocated handle for the UEFI image.
++  @param[in] SystemTable   A pointer to the EFI System Table.
++
++  @retval EFI_SUCCESS      The function executed successfully.
++**/
++EFI_STATUS
++EFIAPI
++PrintAllACPITables (
++  IN EFI_HANDLE        ImageHandle,
++  IN EFI_SYSTEM_TABLE  *SystemTable
++  )
++{
++
++  EFI_CONFIGURATION_TABLE *ConfigTable = SystemTable->ConfigurationTable;
++  EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *Rsdp = NULL;
++
++  for (UINTN Index = 0; Index < SystemTable->NumberOfTableEntries; Index++) {
++    if (CompareGuid(&ConfigTable[Index].VendorGuid, &gEfiAcpi20TableGuid) ||
++        CompareGuid(&ConfigTable[Index].VendorGuid, &gEfiAcpiTableGuid)) {
++      Rsdp = (EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *)ConfigTable[Index].VendorTable;
++      break;
++    }
++  }
++
++  if (Rsdp == NULL) {
++    Print(L"RSDP not found.\n");
++    return EFI_NOT_FOUND;
++  }
++
++  // 打印 RSDT 地址
++  if (Rsdp->RsdtAddress != 0) {
++    EFI_ACPI_DESCRIPTION_HEADER *Rsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)Rsdp->RsdtAddress;
++    Print(L"RSDT Address: 0x%p\n", Rsdt);
++    Print(L"RSDT Signature: %c%c%c%c\n", 
++          Rsdt->Signature & 0xFF,
++          (Rsdt->Signature >> 8) & 0xFF,
++          (Rsdt->Signature >> 16) & 0xFF,
++          (Rsdt->Signature >> 24) & 0xFF);
++    // 打印 RSDT 的 oemid checksum
++    Print(L"RSDT OEM ID: %a, Length: %d ", Rsdt->OemId, Rsdt->Length);
++    UINT8 Checksum = 0;
++    for (UINTN i = 0; i < Rsdt->Length; i++) {
++      Checksum += ((UINT8 *)Rsdt)[i];
++    }
++    Print(L"Checksum: 0x%x\n", Checksum);
++  } else {
++    Print(L"RSDT not present.\n");
++  }
++
++  // 打印 XSDT 地址（仅 ACPI 2.0+）
++  if (Rsdp->Revision >= 2 && Rsdp->XsdtAddress != 0) {
++    EFI_ACPI_DESCRIPTION_HEADER *Xsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)Rsdp->XsdtAddress;
++    Print(L"XSDT Address: 0x%p, Length: %d \n", Xsdt, Xsdt->Length);
++    Print(L"XSDT Signature: %c%c%c%c\n", 
++      Xsdt->Signature & 0xFF,
++      (Xsdt->Signature >> 8) & 0xFF,
++      (Xsdt->Signature >> 16) & 0xFF,
++      (Xsdt->Signature >> 24) & 0xFF);
++    // 打印 XSDT 的 oemid checksum
++    Print(L"XSDT OEM ID: %a, ", Xsdt->OemId);
++    UINT8 Checksum = 0;
++    for (UINTN i = 0; i < Xsdt->Length; i++) {
++      Checksum += ((UINT8 *)Xsdt)[i];
++    }
++    Print(L"Checksum: 0x%x\n", Checksum);
++
++    EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *Fadt = NULL;
++    EFI_ACPI_DESCRIPTION_HEADER *Dsdt = NULL;
++    UINT64 XsdtEntryCount = (Xsdt->Length - sizeof(EFI_ACPI_DESCRIPTION_HEADER)) / sizeof(UINT64);;
++    UINT64 *XsdtEntries = (UINT64 *)(Xsdt + 1);
++    for (UINTN j = 0; j < XsdtEntryCount; j++) {
++      EFI_ACPI_DESCRIPTION_HEADER *Header = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)XsdtEntries[j];
++      if (*(UINT32*)&Header->Signature == SIGNATURE_32('F','A','C','P')) {
++        Fadt = (EFI_ACPI_2_0_FIXED_ACPI_DESCRIPTION_TABLE *)Header;
++        break;
++      }
++    }
++
++    if (Fadt != NULL) {
++      EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *Facs = NULL;
++      if (Fadt->XFirmwareCtrl != 0) {
++        Facs = (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(UINTN)Fadt->XFirmwareCtrl;
++      } else {
++        Facs = (EFI_ACPI_2_0_FIRMWARE_ACPI_CONTROL_STRUCTURE *)(UINTN)Fadt->FirmwareCtrl;
++      }
++      if(Facs != NULL) {
++        Print(L"FACS found at 0x%p, Length: %d\n", Facs, Facs->Length);
++        // 打印 FACS 的 oemid checksum
++        Print(L"FACS Signature: %c%c%c%c, ", 
++              Facs->Signature & 0xFF,
++              (Facs->Signature >> 8) & 0xFF,
++              (Facs->Signature >> 16) & 0xFF,
++              (Facs->Signature >> 24) & 0xFF);
++        UINT8 Checksum = 0;
++        for (UINTN k = 0; k < Facs->Length; k++) {
++          Checksum += ((UINT8 *)Facs)[k];
++        }
++        Print(L"Checksum: 0x%x\n", Checksum);
++      } else {
++        Print(L"FACS not found.\n");
++      }
++      
++      // 根据 ACPI 版本选择哪个字段
++      if (Fadt->Header.Revision >= 3 && Fadt->XDsdt != 0) {
++        Dsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)Fadt->XDsdt;
++      } else {
++        Dsdt = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)Fadt->Dsdt;
++      }
++
++      if (Dsdt != NULL) {
++        Print(L"DSDT found at 0x%p, Length: %d\n", Dsdt, Dsdt->Length);
++        // 打印 DSDT 的 oemid checksum
++        Print(L"DSDT Signature: %c%c%c%c, OEM ID: %a ", 
++              Dsdt->Signature & 0xFF,
++              (Dsdt->Signature >> 8) & 0xFF,
++              (Dsdt->Signature >> 16) & 0xFF,
++              (Dsdt->Signature >> 24) & 0xFF,
++              Dsdt->OemId);
++        UINT8 Checksum = 0;
++        for (UINTN k = 0; k < Dsdt->Length; k++) {
++          Checksum += ((UINT8 *)Dsdt)[k];
++        }
++        Print(L"Checksum: 0x%x\n", Checksum);
++      } else {
++        Print(L"DSDT not found.\n");
++      }
++    }
++  } else {
++    Print(L"XSDT not present or ACPI < 2.0.\n");
++  }
++
++  // 打印 FADT, DSDT
++  
++
++
++  // 打印所有 ACPI 表
++  if (Rsdp && Rsdp->XsdtAddress != 0) {
++    EFI_ACPI_DESCRIPTION_HEADER *XsdtHeader = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)(Rsdp->XsdtAddress);
++  
++    // XSDT 表紧随其后是一组 ACPI 表的指针（64 位）
++    UINTN EntryCount = (XsdtHeader->Length - sizeof(EFI_ACPI_DESCRIPTION_HEADER)) / sizeof(UINT64);
++    UINT64 *EntryPtr = (UINT64 *)(XsdtHeader + 1);
++  
++    for (UINTN j = 0; j < EntryCount; j++) {
++      EFI_ACPI_DESCRIPTION_HEADER *TableHeader = (EFI_ACPI_DESCRIPTION_HEADER *)(UINTN)EntryPtr[j];
++  
++      CHAR8 Signature[5];
++      CopyMem(Signature, &TableHeader->Signature, 4);
++      Signature[4] = '\0';
++      // Calculate and print the checksum of the ACPI table
++      Print(L"ACPI Table %a found at: 0x%p, Length: %d ", Signature, TableHeader, TableHeader->Length);
++      // 打印  oemid 六字节ASCII
++      Print(L", OEM ID: %a ", TableHeader->OemId);
++
++      UINT8 Checksum = 0;
++      for (UINTN k = 0; k < TableHeader->Length; k++) {
++        Checksum += ((UINT8 *)TableHeader)[k];
++      }      
++      Print(L"Checksum: 0x%x\n", Checksum);
++    }
++  }
++  
++
++  return EFI_SUCCESS;
++}
+\ No newline at end of file
+diff --git a/ACPITablePkg/ACPITablePkg.dsc b/ACPITablePkg/ACPITablePkg.dsc
+new file mode 100644
+index 0000000000..9719c35329
+--- /dev/null
++++ b/ACPITablePkg/ACPITablePkg.dsc
+@@ -0,0 +1,68 @@
++[Defines]
++    PLATFORM_NAME = ACPITable
++    PLATFORM_GUID =  6add158b-7b34-43b9-87ab-bb5e57d383a3 # 应由各位自行生成
++    PLATFORM_VERSION = 1.0
++    OUTPUT_DIRECTORY = Build/ACPITable # .efi 输出目录
++
++SUPPORTED_ARCHITECTURES = IA32|X64|EBC|ARM|AARCH64|RISCV64|LOONGARCH64
++BUILD_TARGETS = DEBUG|RELEASE
++!include MdePkg/MdeLibs.dsc.inc
++
++[LibraryClasses]
++    PcdLib|MdePkg/Library/BasePcdLibNull/BasePcdLibNull.inf
++    BaseLib|MdePkg/Library/BaseLib/BaseLib.inf
++  BaseMemoryLib|MdePkg/Library/BaseMemoryLib/BaseMemoryLib.inf
++  BootLogoLib|MdeModulePkg/Library/BootLogoLib/BootLogoLib.inf
++  CacheMaintenanceLib|ArmPkg/Library/ArmCacheMaintenanceLib/ArmCacheMaintenanceLib.inf
++  CapsuleLib|MdeModulePkg/Library/DxeCapsuleLibNull/DxeCapsuleLibNull.inf
++  DebugLib|MdePkg/Library/BaseDebugLibNull/BaseDebugLibNull.inf
++  DxeServicesLib|MdePkg/Library/DxeServicesLib/DxeServicesLib.inf
++  HobLib|MdePkg/Library/DxeHobLib/DxeHobLib.inf
++  MemoryAllocationLib|MdePkg/Library/UefiMemoryAllocationLib/UefiMemoryAllocationLib.inf
++  
++  PrintLib|MdePkg/Library/BasePrintLib/BasePrintLib.inf
++  TimerLib|MdePkg/Library/BaseTimerLibNullTemplate/BaseTimerLibNullTemplate.inf
++  UefiBootManagerLib|MdeModulePkg/Library/UefiBootManagerLib/UefiBootManagerLib.inf
++  UefiBootServicesTableLib|MdePkg/Library/UefiBootServicesTableLib/UefiBootServicesTableLib.inf
++  UefiDriverEntryPoint|MdePkg/Library/UefiDriverEntryPoint/UefiDriverEntryPoint.inf
++  UefiLib|MdePkg/Library/UefiLib/UefiLib.inf
++  DevicePathLib|MdePkg/Library/UefiDevicePathLib/UefiDevicePathLib.inf
++  UefiRuntimeServicesTableLib|MdePkg/Library/UefiRuntimeServicesTableLib/UefiRuntimeServicesTableLib.inf
++  PeCoffLib|MdePkg/Library/BasePeCoffLib/BasePeCoffLib.inf
++  PeCoffGetEntryPointLib|MdePkg/Library/BasePeCoffGetEntryPointLib/BasePeCoffGetEntryPointLib.inf
++  PeCoffExtraActionLib|MdePkg/Library/BasePeCoffExtraActionLibNull/BasePeCoffExtraActionLibNull.inf
++
++  UefiHiiServicesLib|MdeModulePkg/Library/UefiHiiServicesLib/UefiHiiServicesLib.inf
++  HiiLib|MdeModulePkg/Library/UefiHiiLib/UefiHiiLib.inf
++
++  SemihostLib|ArmPkg/Library/SemihostLib/SemihostLib.inf
++  DxeServicesTableLib|MdePkg/Library/DxeServicesTableLib/DxeServicesTableLib.inf
++  DefaultExceptionHandlerLib|ArmPkg/Library/DefaultExceptionHandlerLib/DefaultExceptionHandlerLib.inf
++  CpuExceptionHandlerLib|ArmPkg/Library/ArmExceptionLib/ArmExceptionLib.inf
++
++  CpuLib|MdePkg/Library/BaseCpuLib/BaseCpuLib.inf
++  ArmGenericTimerCounterLib|ArmPkg/Library/ArmGenericTimerPhyCounterLib/ArmGenericTimerPhyCounterLib.inf
++  ArmSvcLib|ArmPkg/Library/ArmSvcLib/ArmSvcLib.inf
++  ArmSmcLib|ArmPkg/Library/ArmSmcLib/ArmSmcLib.inf
++  OpteeLib|ArmPkg/Library/OpteeLib/OpteeLib.inf
++
++  UefiApplicationEntryPoint|MdePkg/Library/UefiApplicationEntryPoint/UefiApplicationEntryPoint.inf
++  PerformanceLib|MdePkg/Library/BasePerformanceLibNull/BasePerformanceLibNull.inf
++  SerialPortLib|MdePkg/Library/BaseSerialPortLibNull/BaseSerialPortLibNull.inf
++
++  ShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
++  FileHandleLib|MdePkg/Library/UefiFileHandleLib/UefiFileHandleLib.inf
++  SortLib|MdeModulePkg/Library/UefiSortLib/UefiSortLib.inf
++
++  IoLib|MdePkg/Library/BaseIoLibIntrinsic/BaseIoLibIntrinsic.inf
++
++  ArmLib|ArmPkg/Library/ArmLib/ArmBaseLib.inf
++  ArmMmuLib|ArmPkg/Library/ArmMmuLib/ArmMmuBaseLib.inf
++  ArmTransferListLib|ArmPkg/Library/ArmTransferListLib/ArmTransferListLib.inf
++  ArmFfaLib|ArmPkg/Library/ArmFfaLib/ArmFfaDxeLib.inf
++
++  ArmMtlLib|ArmPkg/Library/ArmMtlNullLib/ArmMtlNullLib.inf
++
++  OemMiscLib|ArmPkg/Universal/Smbios/OemMiscLibNull/OemMiscLibNull.inf
++[Components]
++    ACPITablePkg/ACPITablePkg.inf
+\ No newline at end of file
+diff --git a/ACPITablePkg/ACPITablePkg.inf b/ACPITablePkg/ACPITablePkg.inf
+new file mode 100644
+index 0000000000..a7d7a5f523
+--- /dev/null
++++ b/ACPITablePkg/ACPITablePkg.inf
+@@ -0,0 +1,22 @@
++[Defines]
++  INF_VERSION                = 0x00010005
++  BASE_NAME                  = ACPITable
++  MODULE_TYPE                = UEFI_APPLICATION
++  VERSION_STRING             = 1.0
++  ENTRY_POINT                = PrintAllACPITables
++
++[Sources]
++  ACPITable.c
++
++[Packages]
++  MdePkg/MdePkg.dec
++  MdeModulePkg/MdeModulePkg.dec
++
++[LibraryClasses]
++  UefiApplicationEntryPoint
++  UefiLib
++  PcdLib
++  
++[Guids]
++  gEfiAcpiTableGuid                   ## CONSUMES
++  gEfiAcpi20TableGuid                 ## CONSUMES
+diff --git a/ShellPkg/Library/UefiShellAcpiViewCommandLib/AcpiView.c b/ShellPkg/Library/UefiShellAcpiViewCommandLib/AcpiView.c
+index 9cdfcb3fae..41fe08a21e 100644
+--- a/ShellPkg/Library/UefiShellAcpiViewCommandLib/AcpiView.c
++++ b/ShellPkg/Library/UefiShellAcpiViewCommandLib/AcpiView.c
+@@ -10,7 +10,8 @@
+     - Arm Server Base Boot Requirements 1.2, September 2019
+ **/
+ 
+-#include <Library/PrintLib.h>
++#include <Library/Print
++Lib.h>
+ #include <Library/UefiLib.h>
+ #include <Library/ShellLib.h>
+ #include <Library/UefiBootServicesTableLib.h>
+@@ -18,6 +19,9 @@
+ #include <Library/DebugLib.h>
+ #include <Library/MemoryAllocationLib.h>
+ #include <Library/AcpiViewCommandLib.h>
++
++#include <Guid/Acpi.h> // Include the header defining gEfiAcpiTableGuid
++
+ #include "AcpiParser.h"
+ #include "AcpiTableParser.h"
+ #include "AcpiView.h"
